@@ -28,8 +28,10 @@ cleanup through synchronous REST calls to asynchronous MQ decoupling and alertin
 Plus [`common/`](common) (no port) — the shared ActiveMQ broker and MQ config notes
 for `congestion-topic`: Routing Service becomes aware of congestion changes via an ActiveMQ Topic instead of querying Congestion Service directly.
 
-**Status:** scaffold only — build files, Javalin bootstrap, and TODOs are in place; no
-business logic has been implemented yet.
+**Status:** Stages 1-2 are implemented: ingestion cleans and serves the CSV, the
+intersection and congestion services expose HTTP endpoints, and routing uses those
+services to estimate travel time. Stages 3-4 (ActiveMQ topic decoupling and heartbeat
+monitoring) are not implemented yet.
 
 ## Your task
 
@@ -83,7 +85,8 @@ trafficflow/
 
 ## Build
 
-Requirements: Java 17+, Maven 3.8+, Docker (for the broker in `common/`).
+Requirements: Java 17+, Maven 3.8+. Docker is only needed when the ActiveMQ-based
+stretch stages are implemented.
 
 Every folder here (`ingestion-service/`, each domain service, and `intersection-watchdog/`) is
 an **independent** Maven project — there is no parent/aggregator pom. Build one at a
@@ -102,24 +105,49 @@ find . -name pom.xml -execdir mvn -q package \;
 
 ## Run
 
+Build the modules once from the repository root before starting the services:
+
+```sh
+find . -name pom.xml -execdir mvn -q package \;
 ```
-# ingestion
-cd ingestion-service && mvn package && java -jar target/ingestion-service.jar
 
-# domain services, each in its own terminal
-# terminal 1
-cd intersection-service && mvn package && java -jar target/intersection-service.jar
-# terminal 2
-cd congestion-service && mvn package && java -jar target/congestion-service.jar
-# terminal 3
-cd routing-service && mvn package && java -jar target/routing-service.jar
+Then open **four separate terminals**, with each terminal's working directory set
+to the repository root. Start the services in this order; keep each terminal open
+while you use the application:
 
-# MQ broker (needed once the MQ-aware services above are wired up)
-cd common && docker compose up -d
+**Terminal 1 — ingestion service (port 7020):**
 
-# alerting
-cd intersection-watchdog && mvn package && java -jar target/intersection-watchdog.jar
+```sh
+cd ingestion-service
+java -jar target/ingestion-service.jar
 ```
+
+**Terminal 2 — intersection service (port 7021):**
+
+```sh
+cd intersection-service
+java -jar target/intersection-service.jar
+```
+
+**Terminal 3 — congestion service (port 7022):**
+
+```sh
+cd congestion-service
+java -jar target/congestion-service.jar
+```
+
+**Terminal 4 — routing service (port 7023):**
+
+```sh
+cd routing-service
+java -jar target/routing-service.jar
+```
+
+Routing calls the intersection and congestion services, and the intersection
+service reads the cleaned records from ingestion. Start those three services
+before routing. The watchdog (port 7024) and ActiveMQ broker are not required for
+the current Stage 1-2 flow; heartbeat monitoring and MQ integration remain
+unfinished.
 
 | Service | Port |
 |---|---|
@@ -131,34 +159,30 @@ cd intersection-watchdog && mvn package && java -jar target/intersection-watchdo
 
 ## Test
 
-No automated tests exist yet (this is a scaffold). Each running service exposes
-`/health`, so sanity-check manually:
+Run the ingestion CSV-cleaning unit tests from the repository root:
 
-```
-curl http://localhost:7020/health   # -> OK
-```
-
-To add real tests to a module, add JUnit 5 and Surefire to its `pom.xml`:
-
-```xml
-<dependency>
-  <groupId>org.junit.jupiter</groupId>
-  <artifactId>junit-jupiter</artifactId>
-  <version>5.10.2</version>
-  <scope>test</scope>
-</dependency>
-```
-
-```xml
-<plugin>
-  <groupId>org.apache.maven.plugins</groupId>
-  <artifactId>maven-surefire-plugin</artifactId>
-  <version>3.2.5</version>
-</plugin>
-```
-
-then add tests under that module's `src/test/java/...` and run:
-
-```
+```sh
+cd ingestion-service
 mvn test
 ```
+
+With the four services running in their terminals, open another terminal at the
+repository root and check service health and the main flow:
+
+```sh
+curl http://localhost:7020/health
+curl http://localhost:7021/health
+curl http://localhost:7022/health
+curl http://localhost:7023/health
+
+# Cleaned CSV records, intersection lookup, and current congestion level
+curl http://localhost:7020/intersections
+curl http://localhost:7021/intersections/INT-1005
+curl http://localhost:7022/congestion
+
+# Route estimate for two known intersections
+curl 'http://localhost:7023/route?origin=INT-1001&destination=INT-1005'
+```
+
+Each health endpoint should return `OK`. The data endpoints return JSON. To stop
+a service, press `Ctrl+C` in that service's terminal.
