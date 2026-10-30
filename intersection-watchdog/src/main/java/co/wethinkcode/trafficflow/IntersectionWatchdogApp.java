@@ -1,16 +1,38 @@
 package co.wethinkcode.trafficflow;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.javalin.Javalin;
 
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 public class IntersectionWatchdogApp {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final AtomicBoolean ALERT_ACTIVE = new AtomicBoolean(false);
 
     public static void main(String[] args) {
         Javalin app = Javalin.create().start(7024);
 
         app.get("/health", ctx -> ctx.result("OK"));
+        app.get("/alert", ctx -> ctx.result(toJson(Map.of("alertActive", ALERT_ACTIVE.get()))).contentType("application/json"));
+        app.post("/alert/clear", ctx -> {
+            ALERT_ACTIVE.set(false);
+            ctx.result(toJson(Map.of("alertActive", false))).contentType("application/json");
+        });
 
-        // TODO (Cries for help if the Intersection Service crashes, since routes can no longer be validated.)
-        // Mechanism: ActiveMQ Queue heartbeat/dead-letter
+        app.post("/alert/trigger", ctx -> {
+            ALERT_ACTIVE.set(true);
+            ctx.result(toJson(Map.of("alertActive", true))).contentType("application/json");
+        });
+    }
+
+    private static String toJson(Object value) {
+        try {
+            return MAPPER.writeValueAsString(value);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to serialize JSON payload", e);
+        }
     }
 }
 
